@@ -114,7 +114,8 @@
            t_wallsha                                              ,&
 
            lai          ,sai          ,fveg         ,sigf         ,&
-           green        ,tleaf        ,ldew         ,t_grnd       ,&
+           green        ,tleaf        ,ldew         ,ldew_rain    ,&
+           ldew_snow    ,fwet_snow    ,t_grnd                     ,&
 
            sag_roof     ,sag_gimp     ,sag_gper     ,sag_lake     ,&
            scv_roof     ,scv_gimp     ,scv_gper     ,scv_lake     ,&
@@ -399,6 +400,9 @@
         !tmax                 ,&! Diurnal Max 2 m height air temperature [kelvin]
         !tmin                 ,&! Diurnal Min 2 m height air temperature [kelvin]
         ldew                  ,&! depth of water on foliage [kg/m2/s]
+        ldew_rain             ,&! depth of rain on foliage[kg/m2/s]
+        ldew_snow             ,&! depth of snow on foliage[kg/m2/s]
+        fwet_snow             ,&! vegetation canopy snow fractional cover [-]
         sag                   ,&! non dimensional snow age [-]
         sag_roof              ,&! non dimensional snow age [-]
         sag_gimp              ,&! non dimensional snow age [-]
@@ -577,7 +581,6 @@
         fioldl (maxsnl+1:nl_soil), &! fraction of ice relative to the total water
         w_old                 ,&! liquid water mass of the column at the previous time step (mm)
         theta                 ,&! sun zenith angle
-!       orb_coszen            ,&! cosine of the solar zenith angle
         sabv                  ,&! solar absorbed by vegetation [W/m2]
         sabroof               ,&! solar absorbed by vegetation [W/m2]
         sabwsun               ,&! solar absorbed by vegetation [W/m2]
@@ -621,6 +624,8 @@
         wt                    ,&! fraction of vegetation buried (covered) by snow [-]
         rootr    (1:nl_soil)  ,&! root resistance of a layer, all layers add to 1.0
         rootflux (1:nl_soil)  ,&! root resistance of a layer, all layers add to 1.0
+        etr_deficit           ,&! urban tree etr deficit [mm/s]
+        urb_irrig             ,&! named urban tree irrigation [mm/s]
 
         zi_wall    (       0:nl_wall) ,&! interface level below a "z" level [m]
         z_roofsno  (maxsnl+1:nl_roof) ,&! layer depth [m]
@@ -651,6 +656,8 @@
         pgimp_snow            ,&! snowfall onto ground including canopy runoff [kg/(m2 s)]
         pg_rain_lake          ,&! rainfall onto lake [kg/(m2 s)]
         pg_snow_lake          ,&! snowfall onto lake [kg/(m2 s)]
+        qintr_rain            ,&! rainfall interception (mm h2o/s)
+        qintr_snow            ,&! snowfall interception (mm h2o/s)
         etrgper               ,&! etr for pervious ground
         fveg_gper             ,&! fraction of fveg/fgper
         fveg_gimp               ! fraction of fveg/fgimp
@@ -686,7 +693,10 @@
    real(r8) snofrz    (maxsnl+1:0)  !snow freezing rate (col,lyr) [kg m-2 s-1]
    real(r8) sabg_lyr  (maxsnl+1:1)  !snow layer absorption [W/m-2]
 
-      theta = acos(max(coszen,0.001))
+   ! a factor represents irrigation efficiency
+   real(r8), parameter :: wst_irrig = 1.0
+
+      theta = acos(max(coszen,0.01))
       forc_aer(:) = 0.          !aerosol deposition from atmosphere model (grd,aer) [kg m-1 s-1]
 
 !======================================================================
@@ -840,6 +850,9 @@
       totwb  = sum(wice_soisno(1:) + wliq_soisno(1:))
       totwb  = totwb + scv + ldew*fveg + wa*(1-froof)*fgper
 
+      etr_deficit = 0.
+      urb_irrig   = 0.
+
 !----------------------------------------------------------------------
 ! [2] Canopy interception and precipitation onto ground surface
 !----------------------------------------------------------------------
@@ -847,7 +860,7 @@
       ! with vegetation canopy
       CALL LEAF_interception_CoLM2014 (deltim,dewmx,forc_us,forc_vs,chil,sigf,lai,sai,tref,tleaf,&
                               prc_rain,prc_snow,prl_rain,prl_snow,bifall,&
-                              ldew,ldew,ldew,z0m,forc_hgt_u,pgper_rain,pgper_snow,qintr,qintr,qintr)
+                              ldew,ldew_rain,ldew_snow,z0m,forc_hgt_u,pgper_rain,pgper_snow,qintr,qintr_rain,qintr_snow)
 
       ! for output, patch scale
       qintr = qintr * fveg * (1-flake)
@@ -990,8 +1003,9 @@
          wliq_gimpsno(lbi:) ,wliq_gpersno(lbp:) ,wliq_lakesno(:)    ,wice_roofsno(lbr:) ,&
          wice_gimpsno(lbi:) ,wice_gpersno(lbp:) ,wice_lakesno(:)    ,t_lake(:)          ,&
          lake_icefrac(:)    ,savedtke1          ,lveg               ,tleaf              ,&
-         ldew               ,t_room             ,troof_inner        ,twsun_inner        ,&
-         twsha_inner        ,t_roommax          ,t_roommin          ,tafu               ,&
+         ldew               ,ldew_rain          ,ldew_snow          ,fwet_snow          ,&
+         t_room             ,troof_inner        ,twsun_inner        ,twsha_inner        ,&
+         t_roommax          ,t_roommin          ,tafu                                   ,&
 
 ! SNICAR model variables
          snofrz(lbsn:0)     ,sabg_lyr(lbp:1)                                            ,&
@@ -1010,22 +1024,25 @@
          qfros_roof         ,qfros_gimp         ,qfros_gper         ,qfros_lake         ,&
          imeltr(lbr:)       ,imelti(lbi:)       ,imeltp(lbp:)       ,imeltl(:)          ,&
          sm_roof            ,sm_gimp            ,sm_gper            ,sm_lake            ,&
-         sabg               ,rstfac             ,rootr(:)           ,tref               ,&
-         qref               ,trad               ,rst                ,assim              ,&
-         respc              ,errore             ,emis               ,z0m                ,&
-         zol                ,rib                ,ustar              ,qstar              ,&
-         tstar              ,fm                 ,fh                 ,fq                 ,&
-         hpbl                                                                            )
+         sabg               ,rstfac             ,rootr(:)           ,etr_deficit        ,&
+         tref               ,qref               ,trad               ,rst                ,&
+         assim              ,respc              ,errore             ,emis               ,&
+         z0m                ,zol                ,rib                ,ustar              ,&
+         qstar              ,tstar              ,fm                 ,fh                 ,&
+         fq                 ,hpbl                                                        )
 
 !----------------------------------------------------------------------
 ! [5] Urban hydrology
 !----------------------------------------------------------------------
       IF (fveg > 0) THEN
          ! convert to unit area
-         etrgper = etr/(1-froof)/fgper
+         etrgper = (etr-etr_deficit)/(1-froof)/fgper
       ELSE
          etrgper = 0.
       ENDIF
+
+      pgper_rain = pgper_rain  + wst_irrig*etr_deficit/(1-froof)/fgper
+      urb_irrig  = etr_deficit + wst_irrig*etr_deficit
 
       CALL UrbanHydrology ( &
          ! model running information
@@ -1220,7 +1237,7 @@
 
       endwb  = sum(wice_soisno(1:) + wliq_soisno(1:))
       endwb  = endwb + scv + ldew*fveg + wa*(1-froof)*fgper
-      errorw = (endwb - totwb) - (forc_prc + forc_prl - fevpa - rnof - errw_rsub)*deltim
+      errorw = (endwb - totwb) - (forc_prc + forc_prl + urb_irrig - fevpa - rnof - errw_rsub)*deltim
       xerr   = errorw/deltim
 
 #if(defined CoLMDEBUG)
@@ -1276,7 +1293,7 @@
 
       CALL alburban (ipatch,froof,fgper,flake,hwr,hroof,&
                      alb_roof,alb_wall,alb_gimp,alb_gper,&
-                     rho,tau,fveg,(htop+hbot)/2.,lai,sai,coszen,fwsun,tlake,&
+                     rho,tau,fveg,(htop+hbot)/2.,lai,sai,fwet_snow,coszen,fwsun,tlake,&
                      fsno_roof,fsno_gimp,fsno_gper,fsno_lake,&
                      scv_roof,scv_gimp,scv_gper,scv_lake,&
                      sag_roof,sag_gimp,sag_gper,sag_lake,&
